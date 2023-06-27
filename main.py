@@ -134,7 +134,7 @@ class GuassianDiffusion:
             self.alpha_bar_scheduler, timesteps, self.device, new_betas
         )
 
-        print(model_kwargs['y'])
+        # print(model_kwargs['y'])
 
         for i, t in zip(np.arange(timesteps)[::-1], new_timesteps[::-1]):
             with torch.no_grad():
@@ -165,7 +165,7 @@ class GuassianDiffusion:
                             scalars.beta_tilde[current_sub_t.long()].sqrt()
                         ) * torch.randn_like(final)
                 final = final.detach()
-                print(final.shape)
+                # print(final.shape)
         return final
 
 
@@ -385,9 +385,16 @@ def main():
     diffusion = GuassianDiffusion(args.diffusion_steps, args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    # load pretrained classifier
     classifier_model = classifier.get_model("resnet50_mnist", num_classes=10)
-    print(list(torch.load(args.classifier_ckpt).keys()))
-    # classifier_model.load_state_dict(torch.load(args.classifier_ckpt))
+    state_dict = torch.load(args.classifier_ckpt)['state_dict']
+    # create new OrderedDict that does not contain `module.`
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k[7:] # remove `module.`
+        new_state_dict[name] = v
+    classifier_model.load_state_dict(new_state_dict)
     classifier_model.eval()
 
     # load pre-trained model
