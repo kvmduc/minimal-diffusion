@@ -7,6 +7,7 @@ import numpy as np
 from time import time
 from tqdm import tqdm
 from easydict import EasyDict
+import classifier
 
 import torch
 import torch.distributed as dist
@@ -103,7 +104,7 @@ class GuassianDiffusion:
         return xt.float(), eps
 
     def sample_from_reverse_process(
-        self, model, xT, timesteps=None, model_kwargs={}, ddim=False
+        self, model, xT, timesteps=None, model_kwargs={}, ddim=False, classifier_model=None
     ):
         """Sampling images by iterating over all timesteps.
 
@@ -132,6 +133,8 @@ class GuassianDiffusion:
         scalars = self.get_all_scalars(
             self.alpha_bar_scheduler, timesteps, self.device, new_betas
         )
+
+        print(model_kwargs['y'])
 
         for i, t in zip(np.arange(timesteps)[::-1], new_timesteps[::-1]):
             with torch.no_grad():
@@ -162,6 +165,7 @@ class GuassianDiffusion:
                             scalars.beta_tilde[current_sub_t.long()].sqrt()
                         ) * torch.randn_like(final)
                 final = final.detach()
+                print(final.shape)
         return final
 
 
@@ -239,6 +243,7 @@ def sample_N_images(
     image_size=32,
     num_classes=None,
     args=None,
+    classifier_model=None
 ):
     """use this function to sample any number of images from a given
         diffusion model and diffusion process.
@@ -269,9 +274,9 @@ def sample_N_images(
                     .to(args.device)
                 )
             if args.class_cond:
-                y = torch.randint(0, 1, (len(xT),), dtype=torch.int64).to(
+                y = torch.randint(0, 1, (len(xT),), dtype=torch.int64).to(          # y : condition tensor for class 0 len xT 
                     args.device
-                )
+                )                   
             else:
                 y = None
             gen_images = diffusion.sample_from_reverse_process(
@@ -280,16 +285,10 @@ def sample_N_images(
             samples_list = [torch.zeros_like(gen_images) for _ in range(num_processes)]
             if args.class_cond:
                 labels_list = [torch.zeros_like(y) for _ in range(num_processes)]
-                # print(y.shape)
-                # print(type(y))
                 labels_list[0] = y
-                # dist.all_gather(labels_list, y, group)
                 labels.append(torch.cat(labels_list).detach().cpu().numpy())
 
-            # print(gen_images.shape)
-            # print(type(gen_images))
             samples_list[0] = gen_images
-            # dist.all_gather(samples_list, gen_images, group)
             samples.append(torch.cat(samples_list).detach().cpu().numpy())
             num_samples += len(xT) * num_processes
             pbar.update(1)
@@ -331,13 +330,15 @@ def main():
     parser.add_argument("--data-dir", type=str, default="./dataset/")
     # optimizer
     parser.add_argument(
-        "--batch-size", type=int, default=128, help="batch-size per gpu"
+        "--batch-size", type=int, default=32, help="batch-size per gpu"
     )
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--epochs", type=int, default=500)
     parser.add_argument("--ema_w", type=float, default=0.9995)
     # sampling/finetuning
     parser.add_argument("--pretrained-ckpt", type=str, help="Pretrained model ckpt")
+    parser.add_argument("--classifier_ckpt", type=str, help="Pretrained classifier ckpt")
+
     parser.add_argument("--delete-keys", nargs="+", help="Pretrained model ckpt")
     parser.add_argument(
         "--sampling-only",
@@ -384,6 +385,11 @@ def main():
     diffusion = GuassianDiffusion(args.diffusion_steps, args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    classifier_model = classifier.get_model("resnet50_mnist", num_classes=10)
+    print(list(torch.load(args.classifier_ckpt).keys()))
+    # classifier_model.load_state_dict(torch.load(args.classifier_ckpt))
+    classifier_model.eval()
+
     # load pre-trained model
     if args.pretrained_ckpt:
         print(f"Loading pretrained model from {args.pretrained_ckpt}")
@@ -425,6 +431,7 @@ def main():
             metadata.image_size,
             metadata.num_classes,
             args,
+            classifier_model
         )
         np.savez(
             os.path.join(
@@ -463,7 +470,7 @@ def main():
         train_one_epoch(model, train_loader, diffusion, optimizer, logger, None, args)
         if not epoch % 1:
             sampled_images, _ = sample_N_images(
-                64,
+                32,
                 model,
                 diffusion,
                 None,
