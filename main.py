@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from data import get_metadata, get_dataset, fix_legacy_dict
 import unets
+import matplotlib.pyplot as plt
 
 unsqueeze3x = lambda x: x[..., None, None, None]
 
@@ -134,13 +135,17 @@ class GuassianDiffusion:
             self.alpha_bar_scheduler, timesteps, self.device, new_betas
         )
 
-        # print(model_kwargs['y'])
+        fake_label = 1
+
+        original_label_tensor = model_kwargs['y']
+        fake_label_tensor = torch.ones_like(original_label_tensor).cuda()
 
         for i, t in zip(np.arange(timesteps)[::-1], new_timesteps[::-1]):
             with torch.no_grad():
+                label = original_label_tensor
                 current_t = torch.tensor([t] * len(final), device=final.device)
-                current_sub_t = torch.tensor([i] * len(final), device=final.device)
-                pred_epsilon = model(final, current_t, **model_kwargs)
+                current_sub_t = torch.tensor([i] * len(final), device=final.device)                
+                pred_epsilon = model(final, current_t, label)
                 # using xt+x0 to derive mu_t, instead of using xt+eps (former is more stable)
                 pred_x0 = self.get_x0_from_xt_eps(
                     final, pred_epsilon, current_sub_t, scalars
@@ -165,7 +170,13 @@ class GuassianDiffusion:
                             scalars.beta_tilde[current_sub_t.long()].sqrt()
                         ) * torch.randn_like(final)
                 final = final.detach()
-                if i%5 == 0:
+                if i%10 == 0:
+                  sample = final[0][0].cpu().numpy()
+                  np.save(f'/content/minimal-diffusion/generated_images/matrix_{t}', sample)
+                  # plt.imshow(sample.cpu().numpy(), cmap=plt.get_cmap('gray'))
+                  # plt.savefig(f'/content/minimal-diffusion/generated_images/test{t}.png')
+                if t == 0:
+                  # print(classifier_model(final))
                   print(torch.nn.functional.softmax(classifier_model(final)))
         return final
 
@@ -275,7 +286,7 @@ def sample_N_images(
                     .to(args.device)
                 )
             if args.class_cond:
-                y = torch.randint(0, 1, (len(xT),), dtype=torch.int64).to(          # y : condition tensor for class 0 len xT 
+                y = torch.randint(8, 9, (len(xT),), dtype=torch.int64).to(          # y : condition tensor for class 0 len xT 
                     args.device
                 )                   
             else:
@@ -387,7 +398,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # load pretrained classifier
-    classifier_model = classifier.get_model("resnet50_mnist", num_classes=10)
+    classifier_model = classifier.get_model("resnet50_mnist", num_classes=10).cuda()
     state_dict = torch.load(args.classifier_ckpt)['state_dict']
     # create new OrderedDict that does not contain `module.`
     from collections import OrderedDict
@@ -397,7 +408,7 @@ def main():
         new_state_dict[name] = v
     classifier_model.load_state_dict(new_state_dict)
     classifier_model.eval()
-    classifier_model.cuda()
+    
 
     # load pre-trained model
     if args.pretrained_ckpt:
