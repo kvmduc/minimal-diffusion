@@ -165,7 +165,8 @@ class GuassianDiffusion:
                             scalars.beta_tilde[current_sub_t.long()].sqrt()
                         ) * torch.randn_like(final)
                 final = final.detach()
-                # print(final.shape)
+                if i%5 == 0:
+                  print(torch.nn.functional.softmax(classifier_model(final)))
         return final
 
 
@@ -280,7 +281,7 @@ def sample_N_images(
             else:
                 y = None
             gen_images = diffusion.sample_from_reverse_process(
-                model, xT, sampling_steps, {"y": y}, args.ddim
+                model, xT, sampling_steps, {"y": y}, args.ddim, classifier_model
             )
             samples_list = [torch.zeros_like(gen_images) for _ in range(num_processes)]
             if args.class_cond:
@@ -396,6 +397,7 @@ def main():
         new_state_dict[name] = v
     classifier_model.load_state_dict(new_state_dict)
     classifier_model.eval()
+    classifier_model.cuda()
 
     # load pre-trained model
     if args.pretrained_ckpt:
