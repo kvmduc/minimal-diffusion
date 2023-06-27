@@ -39,19 +39,19 @@ class GuassianDiffusion:
         self.get_x0_from_xt_eps = lambda xt, eps, t, scalars: (
             self.clamp_x0(
                 1
-                / unsqueeze3x(scalars.alpha_bar[t].sqrt())
-                * (xt - unsqueeze3x((1 - scalars.alpha_bar[t]).sqrt()) * eps)
+                / unsqueeze3x(scalars.alpha_bar[t.long()].sqrt())
+                * (xt - unsqueeze3x((1 - scalars.alpha_bar[t.long()]).sqrt()) * eps)
             )
         )
         self.get_pred_mean_from_x0_xt = (
             lambda xt, x0, t, scalars: unsqueeze3x(
-                (scalars.alpha_bar[t].sqrt() * scalars.beta[t])
-                / ((1 - scalars.alpha_bar[t]) * scalars.alpha[t].sqrt())
+                (scalars.alpha_bar[t.long()].sqrt() * scalars.beta[t.long()])
+                / ((1 - scalars.alpha_bar[t.long()]) * scalars.alpha[t.long()].sqrt())
             )
             * x0
             + unsqueeze3x(
-                (scalars.alpha[t] - scalars.alpha_bar[t])
-                / ((1 - scalars.alpha_bar[t]) * scalars.alpha[t].sqrt())
+                (scalars.alpha[t.long()] - scalars.alpha_bar[t.long()])
+                / ((1 - scalars.alpha_bar[t.long()]) * scalars.alpha[t.long()].sqrt())
             )
             * xt
         )
@@ -159,7 +159,7 @@ class GuassianDiffusion:
                         )
                     else:
                         final = pred_mean + unsqueeze3x(
-                            scalars.beta_tilde[current_sub_t].sqrt()
+                            scalars.beta_tilde[current_sub_t.long()].sqrt()
                         ) * torch.randn_like(final)
                 final = final.detach()
         return final
@@ -258,7 +258,8 @@ def sample_N_images(
     Returns: Numpy array with N images and corresponding labels.
     """
     samples, labels, num_samples = [], [], 0
-    num_processes, group = dist.get_world_size(), dist.group.WORLD
+    # num_processes, group = dist.get_world_size(), dist.group.WORLD
+    num_processes = 1
     with tqdm(total=math.ceil(N / (args.batch_size * num_processes))) as pbar:
         while num_samples < N:
             if xT is None:
@@ -268,7 +269,7 @@ def sample_N_images(
                     .to(args.device)
                 )
             if args.class_cond:
-                y = torch.randint(num_classes, (len(xT),), dtype=torch.int64).to(
+                y = torch.randint(0, 1, (len(xT),), dtype=torch.int64).to(
                     args.device
                 )
             else:
@@ -279,10 +280,16 @@ def sample_N_images(
             samples_list = [torch.zeros_like(gen_images) for _ in range(num_processes)]
             if args.class_cond:
                 labels_list = [torch.zeros_like(y) for _ in range(num_processes)]
-                dist.all_gather(labels_list, y, group)
+                # print(y.shape)
+                # print(type(y))
+                labels_list[0] = y
+                # dist.all_gather(labels_list, y, group)
                 labels.append(torch.cat(labels_list).detach().cpu().numpy())
 
-            dist.all_gather(samples_list, gen_images, group)
+            # print(gen_images.shape)
+            # print(type(gen_images))
+            samples_list[0] = gen_images
+            # dist.all_gather(samples_list, gen_images, group)
             samples.append(torch.cat(samples_list).detach().cpu().numpy())
             num_samples += len(xT) * num_processes
             pbar.update(1)
@@ -360,6 +367,8 @@ def main():
     np.random.seed(args.seed + args.local_rank)
     if args.local_rank == 0:
         print(args)
+    if not os.path.exists(args.save_dir):
+        os.mkdir(args.save_dir)
 
     # Creat model and diffusion process
     model = unets.__dict__[args.arch](
